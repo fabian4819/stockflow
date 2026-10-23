@@ -12,15 +12,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// These are integration tests against a real Postgres with the schema applied
-// (docker compose up -d db). Each test creates its own uniquely named
-// products, so they do not depend on or disturb the seed data.
+// These are integration tests against a real Postgres: the stockflow_test
+// database that docker compose creates next to the app database (see
+// migrations/003_test_database.sh). Each test creates its own uniquely named
+// products, so tests are independent of each other and of run order.
 
 func testStore(t *testing.T) (*Store, *pgxpool.Pool) {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgres://stockflow:stockflow@localhost:5433/stockflow"
+		dsn = "postgres://stockflow:stockflow@localhost:5433/stockflow_test"
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)

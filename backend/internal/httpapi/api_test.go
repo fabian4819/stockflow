@@ -23,7 +23,7 @@ import (
 func TestErrorEnvelope(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgres://stockflow:stockflow@localhost:5433/stockflow"
+		dsn = "postgres://stockflow:stockflow@localhost:5433/stockflow_test"
 	}
 	pool, err := pgxpool.New(context.Background(), dsn)
 	if err == nil {
