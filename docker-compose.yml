@@ -8,6 +8,7 @@ services:
     ports:
       - "5433:5432"
     volumes:
+      # Runs once on an empty volume: schema, seed data, then the test database.
       - ./backend/migrations:/docker-entrypoint-initdb.d:ro
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -15,6 +16,23 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgres://stockflow:stockflow@db:5432/stockflow
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
 
 volumes:
   pgdata:
