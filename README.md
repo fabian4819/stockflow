@@ -222,4 +222,4 @@ It is computed as `(SELECT max(created_at) FROM stock_movements WHERE product_id
 
 ## Time spent
 
-_TODO: fill in honest hours before submitting._
+6–8 hours.
