@@ -268,6 +268,25 @@ It is computed as `(SELECT max(created_at) FROM stock_movements WHERE product_id
 - **Auth and an audit trail** (who adjusted stock): every movement row should carry a user.
 - **URL routing** (e.g. `/orders/12`) so order detail pages can be linked and survive refreshes.
 
+## Commit history
+
+The core was built in one focused working session, so the commit timestamps sit close together rather than spread over the day. Instead of one final dump, the work is split into commits that each cover one layer or concern, in the order it was built. Every step was verified before committing: build, tests, or a manual check against the running app.
+
+| # | Commit | What it adds |
+| - | ------ | ------------ |
+| 1 | `chore: add postgres schema, seed data and compose setup` | Schema, 14 seeded products + 3 orders, Postgres in compose. Seed stock was checked to match the movement ledger. |
+| 2 | `feat(backend): product store with guarded stock adjustments` | Product CRUD, the guarded `stock >= qty` UPDATE, movements in the same transaction. |
+| 3 | `feat(backend): orders, cancellation, idempotency keys and HTTP API` | Atomic order creation, cancel, Idempotency-Key, all HTTP routes and the error envelope. |
+| 4 | `test(backend): integration tests for atomic orders, concurrency, cancel and idempotency` | The required tests plus the `-race` concurrency test. |
+| 5 | `feat(frontend): typed API client, formatting/validation helpers and unit tests` | Shared types, the single API client, pure helpers with Vitest tests. |
+| 6 | `feat(frontend): products, stock adjustment, orders and summary screens` | All five screens. |
+| 7 | `test(backend): run integration tests against a separate stockflow_test database` | Found during manual testing: test data was leaking into the app database. |
+| 8 | `fix(frontend): keep modal open under StrictMode; show proxy 502 as unreachable backend` | Two bugs found while clicking through the app in the browser. |
+| 9 | `build: run db, backend and frontend end to end with docker compose` | Dockerfiles, nginx proxy, full stack in compose. |
+| 10–12 | `docs: …` | This README, time spent, clearer setup steps and port overrides. |
+
+Commits 7 and 8 are deliberately kept as separate fixes rather than folded into earlier commits, so the history shows what testing caught.
+
 ## Time spent
 
 6–8 hours.
