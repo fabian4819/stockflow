@@ -298,4 +298,4 @@ Commits 7 and 8 are deliberately kept as separate fixes rather than folded into 
 
 ## Time spent
 
-6–8 hours.
+About 4 hours.
