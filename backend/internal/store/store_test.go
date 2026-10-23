@@ -324,6 +324,25 @@ func TestCreateOrder_RejectsUnknownAndInactiveSKU(t *testing.T) {
 	}
 }
 
+// Payload errors and unknown SKUs come back together in one 400, so the
+// client never has to fix the form twice.
+func TestCreateOrder_ReportsAllValidationErrorsAtOnce(t *testing.T) {
+	s, _ := testStore(t)
+	p := newProduct(t, s, "A", 1_000, 5)
+	_, _, err := s.CreateOrder(context.Background(), OrderInput{Customer: " ", Items: []OrderItemInput{
+		{SKU: "DOES-NOT-EXIST", Qty: 1}, {SKU: p.SKU, Qty: 0},
+	}}, "")
+	se := wantCode(t, err, CodeValidation)
+	for _, field := range []string{"customer", "items[0].sku", "items[1].qty"} {
+		if se.Fields[field] == "" {
+			t.Errorf("missing error for %s, got %v", field, se.Fields)
+		}
+	}
+	if stockOf(t, s, p.ID) != 5 {
+		t.Error("stock changed on a rejected order")
+	}
+}
+
 func TestDeleteProduct(t *testing.T) {
 	s, _ := testStore(t)
 	ctx := context.Background()

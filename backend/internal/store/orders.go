@@ -81,6 +81,47 @@ func ValidateOrder(in *OrderInput) *Error {
 	return nil
 }
 
+type rowsQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// skuErrors returns "items[i].sku" messages for SKUs that do not exist or are
+// inactive. Blank SKUs are skipped; ValidateOrder already reports those.
+func skuErrors(ctx context.Context, q rowsQuerier, items []OrderItemInput) (map[string]string, error) {
+	skus := make([]string, 0, len(items))
+	for _, it := range items {
+		if it.SKU != "" {
+			skus = append(skus, it.SKU)
+		}
+	}
+	rows, err := q.Query(ctx, `SELECT sku, is_active FROM products WHERE sku = ANY($1)`, skus)
+	if err != nil {
+		return nil, err
+	}
+	active := map[string]bool{}
+	var sku string
+	var isActive bool
+	if _, err := pgx.ForEachRow(rows, []any{&sku, &isActive}, func() error {
+		active[sku] = isActive
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	fields := map[string]string{}
+	for i, it := range items {
+		if it.SKU == "" {
+			continue
+		}
+		key := fmt.Sprintf("items[%d].sku", i)
+		if ok, found := active[it.SKU]; !found {
+			fields[key] = "unknown sku " + it.SKU
+		} else if !ok {
+			fields[key] = it.SKU + " is inactive and cannot be sold"
+		}
+	}
+	return fields, nil
+}
+
 func requestHash(in OrderInput) string {
 	b, _ := json.Marshal(in)
 	sum := sha256.Sum256(b)
@@ -103,6 +144,15 @@ func requestHash(in OrderInput) string {
 // (replayed = true) instead of creating a second one.
 func (s *Store) CreateOrder(ctx context.Context, in OrderInput, idemKey string) (order Order, replayed bool, err error) {
 	if verr := ValidateOrder(&in); verr != nil {
+		// Also report unknown/inactive SKUs, so the client gets every problem in
+		// one 400 instead of fixing the payload only to hit a second round.
+		if skuFields, err := skuErrors(ctx, s.db, in.Items); err == nil {
+			for k, v := range skuFields {
+				if _, taken := verr.Fields[k]; !taken {
+					verr.Fields[k] = v
+				}
+			}
+		}
 		return Order{}, false, verr
 	}
 
@@ -114,10 +164,8 @@ func (s *Store) CreateOrder(ctx context.Context, in OrderInput, idemKey string) 
 		price     int
 	}
 	lines := make([]line, len(in.Items))
-	skus := make([]string, len(in.Items))
 	for i, it := range in.Items {
 		lines[i] = line{idx: i, sku: it.SKU, qty: it.Qty}
-		skus[i] = it.SKU
 	}
 	sort.Slice(lines, func(a, b int) bool { return lines[a].sku < lines[b].sku })
 
@@ -149,26 +197,9 @@ func (s *Store) CreateOrder(ctx context.Context, in OrderInput, idemKey string) 
 		}
 
 		// 1. Validate every SKU before any stock is touched.
-		rows, err := tx.Query(ctx, `SELECT sku, is_active FROM products WHERE sku = ANY($1)`, skus)
+		fields, err := skuErrors(ctx, tx, in.Items)
 		if err != nil {
 			return err
-		}
-		active := map[string]bool{}
-		var sku string
-		var isActive bool
-		if _, err := pgx.ForEachRow(rows, []any{&sku, &isActive}, func() error {
-			active[sku] = isActive
-			return nil
-		}); err != nil {
-			return err
-		}
-		fields := map[string]string{}
-		for _, l := range lines {
-			if isActive, ok := active[l.sku]; !ok {
-				fields[fmt.Sprintf("items[%d].sku", l.idx)] = "unknown sku " + l.sku
-			} else if !isActive {
-				fields[fmt.Sprintf("items[%d].sku", l.idx)] = l.sku + " is inactive and cannot be sold"
-			}
 		}
 		if len(fields) > 0 {
 			return &Error{Code: CodeValidation, Message: "order is invalid", Fields: fields}
