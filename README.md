@@ -127,12 +127,15 @@ Backend tests are integration tests against real Postgres; transaction and locki
 | `TestCreateOrder_ConcurrentOrdersNeverOversell` | 30 goroutines race for 10 units across two SKUs given in opposite order: exactly 10 succeed, stock ends at 0, no deadlock |
 | `TestCancelOrder_RestoresStockExactlyOnce` | 5 concurrent cancels: one wins, stock restored once, the rest get 409 |
 | `TestCreateOrder_IdempotencyKey` | Retry with the same key replays the order; a different body with the same key is rejected |
+| `TestCreateOrder_ReportsAllValidationErrorsAtOnce` | Payload errors and unknown SKUs come back together in one 400 |
 | `TestAdjustStock`, `TestDeleteProduct`, `TestCreateOrder_RejectsUnknownAndInactiveSKU`, `TestValidateOrder` | Adjustments, `PRODUCT_HAS_HISTORY`, 400 rules |
 | `httpapi.TestErrorEnvelope` | Status codes and JSON error shape over real HTTP |
 
 As a sanity check that the concurrency test can fail, removing `AND stock >= $2` from the order UPDATE makes it fail (the `CHECK (stock >= 0)` constraint then turns the oversell into errors instead).
 
-Frontend tests cover Rupiah and relative-time formatting, quantity/price/order validation, mapping server field errors (`items[2].qty`) back onto form rows, and the API client's error parsing.
+Frontend unit tests cover Rupiah and relative-time formatting, quantity/price/order validation, mapping server field errors (`items[2].qty`) back onto form rows, URL route parsing, and the API client's error parsing.
+
+`CreateOrderForm.test.tsx` renders the real order form in jsdom (Testing Library) with only the network calls stubbed. It checks that a 409 `INSUFFICIENT_STOCK` highlights exactly the failing line with "Only N available" and names the SKU in the alert, and that a 400 on `items[1].qty` lands on line 2. The 409 test was checked to fail when the form highlights the wrong line.
 
 ---
 
@@ -223,7 +226,7 @@ Postgres takes the row lock and re-evaluates the `WHERE` against the latest comm
 
 `CreateOrder` runs in one transaction:
 1. Validate the payload without touching the database: customer, non-empty items, `qty > 0`, duplicate SKUs (`400` with `items[i].field` keys).
-2. Check that every SKU exists and is active (`400`) before writing anything.
+2. Check that every SKU exists and is active (`400`) before writing anything. Errors from steps 1 and 2 are returned together in one 400, so the client sees every problem at once.
 3. Decrement each line with the guarded UPDATE. Lines are processed **sorted by SKU**, so two orders containing the same products always lock rows in the same order and can't deadlock. The concurrency test deliberately sends SKUs in opposite orders.
 4. Insert the order, items and `out` movements (`note = "Order #id"`).
 
@@ -255,22 +258,23 @@ It is computed as `(SELECT max(created_at) FROM stock_movements WHERE product_id
 - After any mutation the app invalidates all queries, so products, summary cards, order list and today's sales stay consistent (e.g. cancelling an order visibly restores stock in the products table). That's a blunt but correct choice for an app this size.
 - Loading (skeleton rows), empty (with "clear filters") and error (with Retry) states all render inside the table. To see the error state, stop the backend and type in the search box.
 - Modals use the native `<dialog>` element (focus trap, Escape, backdrop for free). Destructive actions use an inline confirm step rather than `window.confirm`.
+- **URL routes:** `/` (products), `/orders/new` and `/orders/{id}`, so order pages can be linked and survive a refresh. A small History API hook (`hooks/useRoute.ts`) covers three screens without a router dependency; nginx and the Vite dev server fall back to `index.html`.
+- **Order line search:** each line's SKU input searches active products on the server as you type (debounced, 10 results), instead of loading the whole catalogue up front. The exact SKU match drives the line hint (name · price · stock) and the estimated total.
 
 ---
 
 ## What I'd improve next
 
-- **Pagination and filtering for orders** (currently the latest 50), plus a product picker with server-side search instead of loading up to 100 active products into a datalist.
+- **Pagination and filtering for orders** (currently the latest 50).
 - **Migrations tool** (golang-migrate or goose) instead of init scripts, which only run on an empty volume.
 - **Request IDs and structured error logging** with correlation to the UI; metrics on 409 rates per SKU.
 - **Idempotency key expiry** (cleanup job) and storing the full response, so replays also work for non-order endpoints.
-- **Component tests** (Testing Library) for the order form's 409 highlighting, and a Playwright end-to-end run against the compose stack in CI.
+- **More component tests** (stock modal, products page states) and a Playwright end-to-end run against the compose stack in CI.
 - **Auth and an audit trail** (who adjusted stock): every movement row should carry a user.
-- **URL routing** (e.g. `/orders/12`) so order detail pages can be linked and survive refreshes.
 
 ## Commit history
 
-The core was built in one focused working session, so the commit timestamps sit close together rather than spread over the day. Instead of one final dump, the work is split into commits that each cover one layer or concern, in the order it was built. Every step was verified before committing: build, tests, or a manual check against the running app.
+The core (commits 1–13) was built in a first focused session in the morning, so those timestamps sit close together. Refinements followed later in the day as separate commits (14–18). Instead of one final dump, the work is split into commits that each cover one layer or concern, in the order it was built. Every step was verified before committing: build, tests, or a manual check against the running app.
 
 | # | Commit | What it adds |
 | - | ------ | ------------ |
@@ -283,7 +287,12 @@ The core was built in one focused working session, so the commit timestamps sit 
 | 7 | `test(backend): run integration tests against a separate stockflow_test database` | Found during manual testing: test data was leaking into the app database. |
 | 8 | `fix(frontend): keep modal open under StrictMode; show proxy 502 as unreachable backend` | Two bugs found while clicking through the app in the browser. |
 | 9 | `build: run db, backend and frontend end to end with docker compose` | Dockerfiles, nginx proxy, full stack in compose. |
-| 10–12 | `docs: …` | This README, time spent, clearer setup steps and port overrides. |
+| 10–13 | `docs: …` | This README, time spent, clearer setup steps and port overrides, this commit-history section. |
+| 14 | `fix(backend): report unknown SKUs together with payload errors in one 400` | Order validation returns every problem in one response instead of two rounds. |
+| 15 | `feat(frontend): URL routes for products, new order and order detail` | `/orders/{id}` links that survive a refresh; tabs become real links. |
+| 16 | `feat(frontend): server-side SKU search for order lines` | Debounced per-line product search replaces loading 100 products up front. |
+| 17 | `test(frontend): component tests for order form 409 and 400 handling` | jsdom + Testing Library tests for the cross-stack error display. |
+| 18 | `docs: …` | README updated for the refinements above. |
 
 Commits 7 and 8 are deliberately kept as separate fixes rather than folded into earlier commits, so the history shows what testing caught.
 
