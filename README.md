@@ -274,7 +274,7 @@ It is computed as `(SELECT max(created_at) FROM stock_movements WHERE product_id
 
 ## Commit history
 
-The core (commits 1–13) was built in a first focused session in the morning, so those timestamps sit close together. Refinements followed later in the day as separate commits (14–18). Instead of one final dump, the work is split into commits that each cover one layer or concern, in the order it was built. Every step was verified before committing: build, tests, or a manual check against the running app.
+Instead of one final dump, the work is split into commits that each cover one layer or concern, in the order it was built: the core first (1–13), then refinements (14–18). Every step was verified before committing: build, tests, or a manual check against the running app.
 
 | # | Commit | What it adds |
 | - | ------ | ------------ |
