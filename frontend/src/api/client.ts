@@ -50,6 +50,10 @@ export function parseErrorBody(status: number, body: unknown): ErrorBody {
       available: typeof err.available === 'number' ? err.available : undefined,
     }
   }
+  if (status >= 502 && status <= 504) {
+    // The dev proxy / nginx answers for a backend that is down or restarting.
+    return { code: 'NETWORK', message: 'Cannot reach the server. Check that the backend is running.' }
+  }
   return { code: 'INTERNAL', message: `Server responded with HTTP ${status}` }
 }
 

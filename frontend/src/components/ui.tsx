@@ -3,10 +3,10 @@ import { useEffect, useRef, type ReactNode } from 'react'
 /** Native <dialog> as a modal: focus trap, Escape and backdrop come from the browser. */
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDialogElement>(null)
+  // No close() in cleanup: it fires the "close" event, which would call onClose
+  // during StrictMode's mount/unmount/mount cycle. Unmounting removes the dialog anyway.
   useEffect(() => {
-    const dialog = ref.current
-    dialog?.showModal()
-    return () => dialog?.close()
+    if (!ref.current?.open) ref.current?.showModal()
   }, [])
   return (
     <dialog ref={ref} className="modal" onClose={onClose} aria-labelledby="modal-title">

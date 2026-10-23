@@ -19,8 +19,9 @@ describe('parseErrorBody', () => {
   })
 
   it('falls back for non-envelope bodies', () => {
-    expect(parseErrorBody(502, undefined)).toEqual({ code: 'INTERNAL', message: 'Server responded with HTTP 502' })
+    expect(parseErrorBody(500, undefined)).toEqual({ code: 'INTERNAL', message: 'Server responded with HTTP 500' })
     expect(parseErrorBody(500, { message: 'x' }).code).toBe('INTERNAL')
+    expect(parseErrorBody(502, undefined).code).toBe('NETWORK')
   })
 })
 
