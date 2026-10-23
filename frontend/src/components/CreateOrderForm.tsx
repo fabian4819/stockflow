@@ -1,13 +1,15 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useRef, useState, type FormEvent } from 'react'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { ApiError, api, errorMessage } from '../api/client'
 import type { Order, OrderInput, Product } from '../api/types'
+import { useDebounce } from '../hooks/useDebounce'
 import { formatRupiah } from '../lib/format'
 import {
   fieldsToOrderErrors,
   hasOrderErrors,
   parsePositiveInt,
   validateOrderForm,
+  type LineErrors,
   type OrderFormErrors,
 } from '../lib/validate'
 import { Alert, FieldError } from './ui'
@@ -19,6 +21,7 @@ interface Line {
 }
 
 const noErrors: OrderFormErrors = { lines: {} }
+const SUGGESTION_LIMIT = 10
 
 export function CreateOrderForm({ onCreated }: { onCreated: (order: Order) => void }) {
   const queryClient = useQueryClient()
@@ -28,12 +31,12 @@ export function CreateOrderForm({ onCreated }: { onCreated: (order: Order) => vo
   const [errors, setErrors] = useState<OrderFormErrors>(noErrors)
   // One key per draft: a retried submit (double click, flaky network) can never create two orders.
   const [idempotencyKey] = useState(() => crypto.randomUUID())
+  // Product matching each line's SKU exactly, as found by that line's search. Keyed by line id.
+  const [resolved, setResolved] = useState<Record<number, Product | undefined>>({})
 
-  const catalog = useQuery({
-    queryKey: ['products', 'catalog'],
-    queryFn: () => api.listProducts({ search: '', filter: 'active', page: 1, limit: 100 }),
-  })
-  const bySku = new Map<string, Product>((catalog.data?.data ?? []).map((p) => [p.sku, p]))
+  const resolveLine = useCallback((lineId: number, product: Product | undefined) => {
+    setResolved((r) => (r[lineId] === product ? r : { ...r, [lineId]: product }))
+  }, [])
 
   const mutation = useMutation({
     mutationFn: (input: OrderInput) => api.createOrder(input, idempotencyKey),
@@ -84,12 +87,13 @@ export function CreateOrderForm({ onCreated }: { onCreated: (order: Order) => vo
   }
 
   const estimate = lines.reduce((sum, l) => {
-    const p = bySku.get(l.sku.trim())
+    const p = resolved[l.id]
     const q = parsePositiveInt(l.qty)
     return p && q ? sum + p.price * q : sum
   }, 0)
 
   const err = mutation.error
+  const insufficient = err instanceof ApiError && err.code === 'INSUFFICIENT_STOCK'
 
   return (
     <form onSubmit={submit} noValidate className="form order-form">
@@ -109,61 +113,20 @@ export function CreateOrderForm({ onCreated }: { onCreated: (order: Order) => vo
       <FieldError message={errors.customer} />
 
       <div className="label">Items</div>
-      <datalist id="catalog-skus">
-        {catalog.data?.data.map((p) => (
-          <option key={p.id} value={p.sku}>
-            {p.name}
-          </option>
-        ))}
-      </datalist>
-
       <div className="lines">
-        {lines.map((line, i) => {
-          const product = bySku.get(line.sku.trim())
-          const lineErr = errors.lines[i]
-          const failedSku = err instanceof ApiError && err.code === 'INSUFFICIENT_STOCK' && lineErr?.qty !== undefined
-          return (
-            <div key={line.id} className={`line ${lineErr ? 'line-error' : ''}`}>
-              <span className="line-no">{i + 1}</span>
-              <div className="line-sku">
-                <input
-                  className={`input mono ${lineErr?.sku ? 'invalid' : ''}`}
-                  list="catalog-skus"
-                  placeholder="SKU"
-                  aria-label={`Item ${i + 1} SKU`}
-                  value={line.sku}
-                  onChange={(e) => updateLine(i, { sku: e.target.value })}
-                />
-                {product ? (
-                  <span className="hint">
-                    {product.name} · {formatRupiah(product.price)} · {product.stock} in stock
-                  </span>
-                ) : null}
-                <FieldError message={lineErr?.sku} />
-              </div>
-              <div className="line-qty">
-                <input
-                  className={`input ${lineErr?.qty ? 'invalid' : ''}`}
-                  inputMode="numeric"
-                  aria-label={`Item ${i + 1} quantity`}
-                  value={line.qty}
-                  onChange={(e) => updateLine(i, { qty: e.target.value })}
-                />
-                <FieldError message={lineErr?.qty} />
-              </div>
-              <button
-                type="button"
-                className="btn btn-ghost btn-icon"
-                aria-label={`Remove item ${i + 1}`}
-                disabled={lines.length === 1}
-                onClick={() => removeLine(i)}
-              >
-                ×
-              </button>
-              {failedSku && <span className="line-flag">Insufficient stock</span>}
-            </div>
-          )
-        })}
+        {lines.map((line, i) => (
+          <OrderLineRow
+            key={line.id}
+            index={i}
+            line={line}
+            error={errors.lines[i]}
+            insufficient={insufficient && errors.lines[i]?.qty !== undefined}
+            canRemove={lines.length > 1}
+            onChange={(patch) => updateLine(i, patch)}
+            onRemove={() => removeLine(i)}
+            onResolve={resolveLine}
+          />
+        ))}
       </div>
       <FieldError message={errors.items} />
       <button type="button" className="btn btn-sm" onClick={addLine}>
@@ -192,5 +155,84 @@ export function CreateOrderForm({ onCreated }: { onCreated: (order: Order) => vo
         </button>
       </div>
     </form>
+  )
+}
+
+interface LineRowProps {
+  index: number
+  line: Line
+  error?: LineErrors
+  insufficient: boolean
+  canRemove: boolean
+  onChange: (patch: Partial<Line>) => void
+  onRemove: () => void
+  onResolve: (lineId: number, product: Product | undefined) => void
+}
+
+/** One order line. Searches active products on the server as the SKU is typed. */
+function OrderLineRow({ index, line, error, insufficient, canRemove, onChange, onRemove, onResolve }: LineRowProps) {
+  const sku = line.sku.trim()
+  const search = useDebounce(sku, 250)
+  const suggestions = useQuery({
+    queryKey: ['products', 'suggest', search],
+    queryFn: () => api.listProducts({ search, filter: 'active', page: 1, limit: SUGGESTION_LIMIT }),
+    placeholderData: keepPreviousData,
+  })
+
+  // Search matches substrings case-insensitively; only an exact SKU is a real pick.
+  const product = sku ? suggestions.data?.data.find((p) => p.sku === sku) : undefined
+  useEffect(() => onResolve(line.id, product), [line.id, product, onResolve])
+
+  const listId = `sku-options-${line.id}`
+  return (
+    <div className={`line ${error ? 'line-error' : ''}`}>
+      <span className="line-no">{index + 1}</span>
+      <div className="line-sku">
+        <input
+          className={`input mono ${error?.sku ? 'invalid' : ''}`}
+          list={listId}
+          placeholder="Type SKU or product name"
+          aria-label={`Item ${index + 1} SKU`}
+          autoComplete="off"
+          value={line.sku}
+          onChange={(e) => onChange({ sku: e.target.value })}
+        />
+        <datalist id={listId}>
+          {suggestions.data?.data.map((p) => (
+            <option key={p.id} value={p.sku}>
+              {p.name} · {p.stock} in stock
+            </option>
+          ))}
+        </datalist>
+        {product ? (
+          <span className="hint">
+            {product.name} · {formatRupiah(product.price)} · {product.stock} in stock
+          </span>
+        ) : suggestions.isError ? (
+          <span className="hint">Suggestions unavailable: {errorMessage(suggestions.error)}</span>
+        ) : null}
+        <FieldError message={error?.sku} />
+      </div>
+      <div className="line-qty">
+        <input
+          className={`input ${error?.qty ? 'invalid' : ''}`}
+          inputMode="numeric"
+          aria-label={`Item ${index + 1} quantity`}
+          value={line.qty}
+          onChange={(e) => onChange({ qty: e.target.value })}
+        />
+        <FieldError message={error?.qty} />
+      </div>
+      <button
+        type="button"
+        className="btn btn-ghost btn-icon"
+        aria-label={`Remove item ${index + 1}`}
+        disabled={!canRemove}
+        onClick={onRemove}
+      >
+        ×
+      </button>
+      {insufficient && <span className="line-flag">Insufficient stock</span>}
+    </div>
   )
 }
