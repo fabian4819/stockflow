@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: stockflow
       POSTGRES_DB: stockflow
     ports:
-      - "5433:5432"
+      - "${DB_PORT:-5433}:5432"
     volumes:
       # Runs once on an empty volume: schema, seed data, then the test database.
       - ./backend/migrations:/docker-entrypoint-initdb.d:ro
@@ -22,7 +22,7 @@ services:
     environment:
       DATABASE_URL: postgres://stockflow:stockflow@db:5432/stockflow
     ports:
-      - "8080:8080"
+      - "${API_PORT:-8080}:8080"
     depends_on:
       db:
         condition: service_healthy
@@ -30,7 +30,7 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "3000:80"
+      - "${APP_PORT:-3000}:80"
     depends_on:
       - backend
 

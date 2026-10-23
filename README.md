@@ -25,11 +25,25 @@ stockflow/
 
 ## Running it
 
+### Prerequisites
+
+- **Docker** with Compose v2 (the `docker compose` command, not the legacy `docker-compose`). This is all you need for Option A.
+- **Go 1.26+** and **Node 22+**, only for Option B and for running the tests.
+
+```bash
+git clone https://github.com/fabian4819/stockflow.git
+cd stockflow
+```
+
+All commands below are run from the repository root unless a step says `cd` into a folder.
+
 ### Option A: everything in Docker (recommended)
 
 ```bash
 docker compose up --build
 ```
+
+The first run downloads the Postgres, Go, Node and nginx base images and installs npm packages, so expect roughly 1–3 minutes depending on your connection. Later starts take a few seconds. The app is ready when `http://localhost:3000` loads.
 
 | What     | URL                    |
 | -------- | ---------------------- |
@@ -45,14 +59,20 @@ docker compose down -v && docker compose up --build
 
 ### Option B: database in Docker, apps locally (for development)
 
-Requires Go 1.26+ and Node 22+.
+Requires Go 1.26+ and Node 22+. Use three terminals, each starting in the repository root:
 
 ```bash
-docker compose up -d db                    # 1. Postgres with schema + seed
+# Terminal 1: Postgres with schema + seed (runs in the background)
+docker compose up -d db
 
-cd backend && go run ./cmd/api             # 2. API on :8080
+# Terminal 2: API on http://localhost:8080
+cd backend
+go run ./cmd/api
 
-cd frontend && npm install && npm run dev  # 3. UI on http://localhost:5173
+# Terminal 3: UI on http://localhost:5173
+cd frontend
+npm install
+npm run dev
 ```
 
 The backend reads `DATABASE_URL` (default `postgres://stockflow:stockflow@localhost:5433/stockflow`) and `PORT` (default `8080`).
@@ -61,13 +81,41 @@ The backend reads `DATABASE_URL` (default `postgres://stockflow:stockflow@localh
 
 If the full Docker stack is already running, stop it first (`docker compose stop backend frontend`) because both use port 8080.
 
+### If a port is already in use
+
+The host ports can be changed with environment variables:
+
+| Variable   | Default | Used by |
+| ---------- | ------- | ------- |
+| `APP_PORT` | 3000    | UI (Docker) |
+| `API_PORT` | 8080    | API (Docker) |
+| `DB_PORT`  | 5433    | Postgres (5433 instead of 5432 to avoid clashing with a local Postgres) |
+
+```bash
+APP_PORT=3001 API_PORT=8081 DB_PORT=6543 docker compose up --build
+```
+
+If you change `DB_PORT` and run the backend or the tests locally, point them at the new port:
+
+```bash
+DATABASE_URL=postgres://stockflow:stockflow@localhost:6543/stockflow go run ./cmd/api
+TEST_DATABASE_URL=postgres://stockflow:stockflow@localhost:6543/stockflow_test go test -race ./...
+```
+
+For Option B, the backend's own port is set with `PORT` (e.g. `PORT=8081 go run ./cmd/api`). The Vite proxy then needs `API_PROXY_TARGET=http://localhost:8081 npm run dev`.
+
 ### Tests
 
 ```bash
-docker compose up -d db                    # tests use the stockflow_test database
-cd backend && go test -race ./...
+# Backend (needs the db container; tests use the stockflow_test database)
+docker compose up -d db
+cd backend
+go test -race ./...
 
-cd frontend && npm test                    # Vitest
+# Frontend (Vitest, no backend needed), from the repository root
+cd frontend
+npm install
+npm test
 ```
 
 Backend tests are integration tests against real Postgres; transaction and locking behaviour is the thing being tested, so a mock would prove nothing. Each test creates its own uniquely named products, so tests don't depend on each other or on run order. Override the DSN with `TEST_DATABASE_URL`.
